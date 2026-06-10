@@ -88,6 +88,29 @@ def _move_path_to_path_or_stream(src, dst):
         shutil.move(src, dst, copy_function=shutil.copyfile)
 
 
+# Bytes that may not appear unescaped in a PostScript name token: whitespace,
+# the PostScript delimiters ()<>[]{}/% and # (which is the escape char itself),
+# plus any control or non-ASCII byte.
+_ps_name_escapes = {
+    c: '#%02x' % c
+    for c in ({*range(256)} - {*range(0x21, 0x7f)}) | {*b'()<>[]{}/%#'}
+}
+# A PostScript (...) literal string only needs the backslash and parentheses
+# escaped; mirror the PDF backend's string escaping.
+_ps_string_escapes = str.maketrans({
+    '\\': '\\\\', '(': '\\(', ')': '\\)', '\n': '\\n', '\r': '\\r'})
+
+
+def _serialize_ps_name(name):
+    """Escape *name* so it is safe to emit as a PostScript ``/name`` token."""
+    return str(name).translate(_ps_name_escapes)
+
+
+def _serialize_ps_string(text):
+    """Escape *text* so it is safe to emit inside a PostScript ``(...)`` string."""
+    return str(text).translate(_ps_string_escapes)
+
+
 def _font_to_ps_type3(font_path, subset_index, glyph_indices):
     """
     Subset *glyphs_indices* from the font at *font_path* into a Type 3 font.
@@ -121,10 +144,10 @@ def _font_to_ps_type3(font_path, subset_index, glyph_indices):
 /Encoding [{encoding}] def
 /CharStrings {num_glyphs} dict dup begin
 /.notdef 0 def
-""".format(font_name=font.postscript_name, subset=subset_index,
+""".format(font_name=_serialize_ps_name(font.postscript_name), subset=subset_index,
            inv_units_per_em=1 / font.units_per_EM,
            bbox=" ".join(map(str, font.bbox)),
-           encoding=" ".join(f"/{font.get_glyph_name(glyph_index)}"
+           encoding=" ".join(f"/{_serialize_ps_name(font.get_glyph_name(glyph_index))}"
                              for glyph_index in glyph_indices),
            num_glyphs=len(glyph_indices) + 1)
     postamble = """
@@ -152,7 +175,7 @@ FontName currentdict end definefont pop
         v, c = font.get_path()
         entries.append(
             "/%(name)s{%(bbox)s sc\n" % {
-                "name": font.get_glyph_name(glyph_index),
+                "name": _serialize_ps_name(font.get_glyph_name(glyph_index)),
                 "bbox": " ".join(map(str, [g.horiAdvance, 0, *g.bbox])),
             }
             + _path.convert_to_string(
@@ -233,11 +256,11 @@ def _serialize_type42(font, subset_index, subset, fontdata):
         10 dict begin
         /FontType 42 def
         /FontMatrix [1 0 0 1 0 0] def
-        /FontName /{name.getDebugName(6)}-{subset_index} def
+        /FontName /{_serialize_ps_name(name.getDebugName(6))}-{subset_index} def
         /FontInfo 7 dict dup begin
-        /FullName ({name.getDebugName(4)}) def
-        /FamilyName ({name.getDebugName(1)}) def
-        /Version ({name.getDebugName(5)}) def
+        /FullName ({_serialize_ps_string(name.getDebugName(4))}) def
+        /FamilyName ({_serialize_ps_string(name.getDebugName(1))}) def
+        /Version ({_serialize_ps_string(name.getDebugName(5))}) def
         /ItalicAngle {post.italicAngle} def
         /isFixedPitch {'true' if post.isFixedPitch else 'false'} def
         /UnderlinePosition {post.underlinePosition} def
@@ -340,7 +363,7 @@ def _generate_charstrings(font):
     go = font.getGlyphOrder()
     s = f'/CharStrings {len(go)} dict dup begin\n'
     for i, name in enumerate(go):
-        s += f'/{name} {i} def\n'
+        s += f'/{_serialize_ps_name(name)} {i} def\n'
     s += 'end readonly def'
     return s
 

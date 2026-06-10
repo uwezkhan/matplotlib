@@ -407,3 +407,41 @@ def test_auto_papersize_removal():
 
     with pytest.raises(ValueError, match="'auto' is not a valid value"):
         mpl.rcParams['ps.papersize'] = 'auto'
+
+
+_PS_DELIMITERS = set(" \t\r\n()<>[]{}/%")
+
+
+@pytest.mark.parametrize("name", ["Arial", ".notdef", "a.sc", "uni0041", "g_1-2"])
+def test_serialize_ps_name_passthrough(name):
+    # Regular PostScript names are emitted unchanged.
+    from matplotlib.backends.backend_ps import _serialize_ps_name
+    assert _serialize_ps_name(name) == name
+
+
+def test_serialize_ps_name_escapes_delimiters():
+    from matplotlib.backends.backend_ps import _serialize_ps_name
+    out = _serialize_ps_name("x} 0 def\n/F1 (pwned) print {")
+    assert not (set(out) & _PS_DELIMITERS)
+
+
+def test_serialize_ps_string_escapes_parens():
+    from matplotlib.backends.backend_ps import _serialize_ps_string
+    out = _serialize_ps_string(r"a) 0 0 moveto (b\c")
+    # No unescaped parenthesis can close the (...) literal early.
+    assert not re.search(r"(?<!\\)[()]", out)
+
+
+def test_type42_charstrings_escape_glyph_names():
+    # A font-supplied glyph name must not break out of its /name token.
+    from matplotlib.backends.backend_ps import _generate_charstrings
+
+    class _Font:
+        def getGlyphOrder(self):
+            return [".notdef", "A", "g} (pwned) print /F1 findfont {"]
+
+    out = _generate_charstrings(_Font())
+    for line in out.splitlines():
+        if line.startswith("/"):
+            token = line.split(None, 1)[0][1:]
+            assert not (set(token) & _PS_DELIMITERS)
